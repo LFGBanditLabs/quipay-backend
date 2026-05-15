@@ -1,29 +1,19 @@
-## ─────────────────────────────────────────────────────────────────────────────
-## Stage 1: Build (includes dev dependencies + toolchain)
-## ─────────────────────────────────────────────────────────────────────────────
-FROM node:22-alpine AS build
+FROM node:22-alpine
 
 WORKDIR /app
 
-# Install dependencies (including dev deps) for build
+# Install dependencies first for caching
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
-# Copy source and build
+# Copy source code
 COPY . .
-RUN npm run build
 
-## ─────────────────────────────────────────────────────────────────────────────
-## Stage 2: Runtime (tiny nginx image serving dist/)
-## ─────────────────────────────────────────────────────────────────────────────
-FROM nginx:alpine AS runtime
+# Expose port
+EXPOSE 3001
 
-# SPA routing + sensible caching
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+HEALTHCHECK --interval=15s --timeout=5s --retries=5 --start-period=20s \
+	CMD wget -qO- http://localhost:3001/health | grep -q '"status":"ok"' || exit 1
 
-# Static site output
-COPY --from=build /app/dist /usr/share/nginx/html
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+# Hot reload is handled via volume mount and npm run dev in docker-compose
+CMD ["npm", "run", "dev"]

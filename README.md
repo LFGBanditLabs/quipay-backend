@@ -1,378 +1,348 @@
-# Quipay
+# Quipay Backend
 
-<div align="center">
-
-![Quipay Banner](https://img.shields.io/badge/Quipay-Payroll%20on%20Autopilot-blue?style=for-the-badge)
-
-**Autonomous Payroll Infrastructure on Stellar**
-
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Stellar](https://img.shields.io/badge/Built%20on-Stellar-7D00FF?logo=stellar)](https://stellar.org)
-[![Soroban](https://img.shields.io/badge/Smart%20Contracts-Soroban-00D4FF)](https://soroban.stellar.org)
-
-[Features](#-features) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Contributing](#-contributing)
-
-</div>
+The Quipay automation engine — an Express/TypeScript API server that orchestrates payroll streams on the Stellar/Soroban network. It exposes a REST API, a Socket.IO WebSocket server, and a suite of background workers that keep on-chain state in sync with the PostgreSQL database.
 
 ---
 
-## 📖 Overview
+## Table of Contents
 
-Quipay is a decentralized payroll protocol enabling **continuous salary streaming**, **automated treasury management**, and **AI-powered payroll operations** on the Stellar blockchain. Built for the future of work, Quipay eliminates traditional payroll friction through programmable smart contracts and intelligent automation.
-
-### Why Quipay?
-
-- **🌍 Global** - Borderless payments in any Stellar asset
-- **⚡ Real-Time** - Workers access earnings continuously, not monthly
-- **🤖 Autonomous** - AI agents handle scheduling and optimization
-- **🔒 Secure** - Treasury solvency enforced on-chain
-- **📊 Transparent** - All transactions verifiable and auditable
+1. [Prerequisites](#prerequisites)
+2. [Local Setup](#local-setup)
+3. [Architecture Overview](#architecture-overview)
+4. [Key Environment Variables](#key-environment-variables)
+5. [Testing](#testing)
+6. [Useful Scripts](#useful-scripts)
 
 ---
 
-## ✨ Features
+## Prerequisites
 
-### For Employers
+| Dependency                  | Minimum version | Notes                                                                                         |
+| --------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| **Node.js**                 | 22 (LTS)        | Matches the `node:22-alpine` Docker image                                                     |
+| **npm**                     | 10+             | Bundled with Node 22                                                                          |
+| **PostgreSQL**              | 16              | Schema is in `src/db/schema.sql`; migrations via Drizzle Kit                                  |
+| **Redis**                   | 7 _(optional)_  | Required only for distributed rate-limiting. Falls back to in-memory if `REDIS_URL` is absent |
+| **Docker + Docker Compose** | 24+             | For the containerised stack and integration-test containers                                   |
+| **TypeScript**              | 5.8             | Installed as a dev dependency — no global install needed                                      |
 
-- **Continuous Payment Streams** - Set up recurring salaries that accrue per second
-- **Stream Cancellation** - Cancel active streams anytime with automated prorated payouts
-- **Direct Treasury Deposits** - Easily fund your payroll vault from the interface
-- **Treasury Solvency Management** - Automatic balance verification prevents overspending
-- **Multi-Token Support** - Pay in XLM, USDC, or any Stellar asset
-- **AI Automation** - Intelligent agents handle payroll scheduling and treasury optimization
-- **Compliance Ready** - Built-in audit trails and payment verification
-
-### For Workers
-
-- **Instant Access** - Withdraw earned salary anytime, no waiting for payday
-- **Real-Time Earnings** - See your balance grow every second
-- **Flexible Withdrawals** - Partial or full payouts on demand
-- **Stream History Timeline** - Interactive visual timeline of your stream lifecycle
-- **Multi-Stream Support** - Manage multiple income sources in one place
-- **Payment History** - Complete transaction transparency
+> **Stellar / Soroban access** — A Soroban-compatible RPC endpoint is required at runtime (`STELLAR_RPC_URL`). The public testnet endpoint (`https://soroban-testnet.stellar.org`) works for local development and is the default.
 
 ---
 
-## 🏗️ Architecture
+## Local Setup
 
-Quipay uses a modular smart contract architecture for security, scalability, and maintainability:
-
-### Smart Contracts
-
-| Contract              | Purpose                                           | Status            |
-| --------------------- | ------------------------------------------------- | ----------------- |
-| **PayrollStream**     | Continuous salary streaming & accrual calculation | 🚧 In Development |
-| **TreasuryVault**     | Employer fund custody with liability accounting   | ✅ Base Complete  |
-| **WorkforceRegistry** | Worker profiles & payment preferences             | 📋 Planned        |
-| **AutomationGateway** | AI agent authorization & execution routing        | 📋 Planned        |
-
-### Technology Stack
-
-```
-┌─────────────────────────────────────────────┐
-│           Frontend (Vite + React)           │
-│   • Wallet Integration (Freighter)         │
-│   • Real-time Earnings Display             │
-│   • Dashboard & Analytics                  │
-└──────────────────┬──────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────┐
-│      Smart Contracts (Soroban/Rust)        │
-│   • PayrollStream                          │
-│   • TreasuryVault                          │
-│   • WorkforceRegistry                      │
-│   • AutomationGateway                      │
-└──────────────────┬──────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────┐
-│         Stellar Blockchain                  │
-│   • Asset Transfers                        │
-│   • Ledger State                           │
-└─────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────┐
-│       AI Treasury Agent (Node.js)           │
-│   • Payroll Scheduling                     │
-│   • Solvency Monitoring                    │
-│   • Risk Detection                         │
-└─────────────────────────────────────────────┘
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Rust** 1.79+ ([Install](https://www.rust-lang.org/tools/install))
-- **Node.js** 22+ ([Install](https://nodejs.org/))
-- **Stellar CLI** ([Install Guide](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup))
-- **Scaffold Stellar CLI** ([Install](https://github.com/theahaco/scaffold-stellar))
-
-### Installation
+### 1. Clone and install
 
 ```bash
-# Clone the repository — use --depth 1 for a much faster download
-git clone --depth 1 https://github.com/LFGBanditLabs/Quipay.git
-cd Quipay
-
-# Install dependencies
+git clone git@github.com:Wilfred007/Quipay.git
+cd Quipay/backend
 npm install
-
-# Start development server
-npm start
 ```
 
-The development server will:
-
-1. ✅ Compile Soroban smart contracts
-2. ✅ Deploy to local Stellar sandbox
-3. ✅ Generate TypeScript client bindings
-4. ✅ Launch frontend at **http://localhost:5173**
-
-### 🐳 Full Stack (Docker Compose) - Recommended
-
-The easiest way to set up the entire Quipay stack locally (including Postgres, Redis, and Stellar Quickstart) is using Docker Compose:
+### 2. Configure environment variables
 
 ```bash
-# Start everything with one command
-make dev
+cp .env.example .env
+```
 
-# Or directly with Docker Compose
+Open `.env` and fill in at least the required values (see [Key Environment Variables](#key-environment-variables)). For a minimal local setup you only need `DATABASE_URL`; every other variable has a safe development default.
+
+### 3. Start PostgreSQL
+
+**Option A — Docker (recommended)**
+
+```bash
+docker run --rm \
+  -e POSTGRES_DB=quipay \
+  -e POSTGRES_USER=user \
+  -e POSTGRES_PASSWORD=password \
+  -p 5432:5432 \
+  postgres:16-alpine
+```
+
+**Option B — local install**
+
+```bash
+createdb quipay
+```
+
+Then set `DATABASE_URL=postgresql://user:password@localhost:5432/quipay` in your `.env`.
+
+### 4. Run database migrations
+
+```bash
+# Generate migration SQL from the Drizzle schema (only needed after schema changes)
+npm run migration:generate
+
+# Apply all pending migrations
+npm run migrate
+```
+
+### 5. (Optional) Seed the database
+
+```bash
+npm run seed
+```
+
+### 6. Start the development server
+
+```bash
+npm run dev
+```
+
+The server starts on `http://localhost:3001` by default (`PORT` env var). Hot-reloading is provided by `ts-node-dev`.
+
+**Verify it is running:**
+
+```bash
+curl http://localhost:3001/health
+```
+
+You should receive a JSON body with `"status":"ok"`.
+
+### Docker Compose (full stack)
+
+If a `docker-compose.yml` is present at the repo root, the entire stack (backend + PostgreSQL + Redis) can be started with:
+
+```bash
 docker compose up --build
 ```
 
-This will:
+The backend `Dockerfile` exposes port `3001` and performs a health check against `/health`.
 
-1.  Spin up **PostgreSQL** (Port 5432)
-2.  Spin up **Redis** (Port 6379)
-3.  Spin up **Stellar Quickstart** in Standalone mode (Port 8000)
-4.  Run migrations and seed the database with test data
-5.  Start the **Backend** with hot-reload (Port 3001)
-6.  Start the **Frontend** with hot-reload (Port 5173)
+---
 
-**Wait for Initialization:** The first start may take a minute while the Stellar network node initializes. Once the backend logs show `✅ Services initialized`, the system is ready.
+## Architecture Overview
 
-### Running Tests
+The backend is composed of **one HTTP/WebSocket process** and **five background subsystems** that are all started inside the same Node.js process on boot.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                     Express HTTP Server                   │
+│  REST API · Swagger UI (/api-docs) · Metrics (/metrics)  │
+│  Health (/health) · Webhooks · Admin · Analytics         │
+└───────────────────────┬──────────────────────────────────┘
+                        │ attaches to same http.Server
+┌───────────────────────▼──────────────────────────────────┐
+│               Socket.IO WebSocket Server                  │
+│  JWT-authenticated · rooms: employer / worker / stream   │
+│  Events: stream_created, withdrawal, stream_cancelled…   │
+└──────────────────────────────────────────────────────────┘
+
+Background workers (started after HTTP server is listening)
+┌──────────────┐ ┌──────────────┐ ┌──────────────────────┐
+│  Scheduler   │ │   Monitor    │ │   Event Indexer      │
+│ (scheduler/) │ │ (monitor/)   │ │ (services/eventIndex)│
+└──────────────┘ └──────────────┘ └──────────────────────┘
+┌──────────────┐ ┌──────────────────────────────────────┐
+│    Syncer    │ │      Stellar Listener (real-time)    │
+│ (syncer.ts)  │ │         (stellarListener.ts)         │
+└──────────────┘ └──────────────────────────────────────┘
+```
+
+### Scheduler (`src/scheduler/scheduler.ts`)
+
+Reads `payroll_schedules` from PostgreSQL and registers a `node-cron` task for each active schedule. Every `SCHEDULER_POLL_MS` (default **60 s**) it reconciles the in-memory job map against the DB — adding new jobs, removing cancelled ones, and rescheduling cron-expression changes. It also runs:
+
+- **Webhook retry runner** — polls `webhook_outbound_events` every `WEBHOOK_RETRY_POLL_MS` (default **10 s**) and retries failed deliveries in batches.
+- **Worker notification crons** — checks cliff unlocks (`*/30 * * * *`), low treasury runway (`0 */2 * * *`), and ending streams (`0 * * * *`).
+
+All payroll execution tasks use PostgreSQL advisory locks to prevent duplicate processing across horizontal replicas.
+
+### Monitor (`src/monitor/monitor.ts`)
+
+Runs a treasury health cycle every `MONITOR_INTERVAL_MS` (default **5 min**). For every employer it:
+
+1. Fetches treasury balances and active stream liabilities.
+2. Calculates **daily burn rate** and **runway days**.
+3. Fires a `sendTreasuryAlert` notification when runway < `TREASURY_RUNWAY_ALERT_DAYS` (default **7**).
+4. Persists a snapshot row to `treasury_monitor_log` and the audit log.
+
+The `/monitor/status` endpoint manually triggers one cycle and returns the result (protected by rate-limiting and an optional bearer token).
+
+### Event Indexer / Stellar Listener (`src/services/eventIndexer.ts`, `src/stellarListener.ts`)
+
+Two complementary Soroban event ingestion paths:
+
+- **Stellar Listener** — real-time poll every **5 s** against the Soroban RPC for new ledger events. Parses topics, classifies them (`withdrawal`, `new_stream`), and fans out webhook notifications. Falls back to simulated events every 15 s when `QUIPAY_CONTRACT_ID` is not set.
+- **Event Indexer** — driven by `startEventIndexer` from `services/eventIndexer.ts`; handles backfill and structured persistence.
+
+### Syncer (`src/syncer.ts`)
+
+Historical backfill engine. Reads the last synced ledger from `sync_cursors`, fetches Soroban events in batches of 200, upserts stream/withdrawal rows via `db/queries`, and advances the cursor. Batches are enqueued through `queue/asyncQueue` with up to 3 retries; failed batches go to the dead-letter queue and the cursor is advanced to avoid a permanent stall. Emits WebSocket events for each ingested record.
+
+The syncer polls every `SYNCER_POLL_MS` (default **10 s**) and uses an advisory lock (`888888`) so only one replica processes events at a time.
+
+### WebSocket Server (`src/websocket/server.ts`)
+
+Socket.IO server mounted on the same HTTP server at path `/socket.io`. Clients authenticate via a JWT passed in `socket.handshake.auth.token`. After auth, clients are placed into rooms:
+
+| Room pattern       | Receives                            |
+| ------------------ | ----------------------------------- |
+| `employer:<id>`    | All stream events for that employer |
+| `worker:<address>` | All stream events for that worker   |
+| `stream:<id>`      | Events for a specific stream        |
+| `admin`            | All events (admin role)             |
+
+Clients can also subscribe/unsubscribe to individual streams with `subscribe:stream` / `unsubscribe:stream` events.
+
+---
+
+## Key Environment Variables
+
+Full list with defaults in [`backend/.env.example`](.env.example). The most important variables are documented below.
+
+### Server
+
+| Variable          | Default         | Description                                                                                                                    |
+| ----------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `PORT`            | `3001`          | HTTP listen port                                                                                                               |
+| `ALLOWED_ORIGINS` | _(see example)_ | Comma-separated CORS whitelist. **Required in production** — the server exits at startup if missing when `NODE_ENV=production` |
+| `NODE_ENV`        | —               | `development` disables certain strict guards (e.g. `HOT_WALLET_ACCOUNT` placeholder check)                                     |
+
+### Database
+
+| Variable       | Required | Description                                                                           |
+| -------------- | -------- | ------------------------------------------------------------------------------------- |
+| `DATABASE_URL` | **Yes**  | PostgreSQL connection string, e.g. `postgresql://user:password@localhost:5432/quipay` |
+
+### Stellar / Soroban
+
+| Variable                     | Default                               | Description                                                                 |
+| ---------------------------- | ------------------------------------- | --------------------------------------------------------------------------- |
+| `STELLAR_NETWORK`            | `TESTNET`                             | `TESTNET` or `PUBLIC`                                                       |
+| `STELLAR_RPC_URL`            | `https://soroban-testnet.stellar.org` | Soroban RPC endpoint                                                        |
+| `PUBLIC_STELLAR_RPC_URL`     | same as above                         | Used by the syncer and listener                                             |
+| `QUIPAY_CONTRACT_ID`         | —                                     | Soroban contract address. When absent, the listener runs in simulation mode |
+| `HOT_WALLET_ACCOUNT`         | —                                     | Stellar account for the nonce manager. **Required outside development**     |
+| `AUTOMATION_GATEWAY_ADDRESS` | —                                     | On-chain automation gateway contract address                                |
+| `PAYROLL_STREAM_ADDRESS`     | —                                     | On-chain payroll stream contract address                                    |
+| `SYNC_START_LEDGER`          | `0`                                   | Ledger to begin historical backfill from (0 = full history)                 |
+
+### Redis (optional)
+
+| Variable    | Default | Description                                                             |
+| ----------- | ------- | ----------------------------------------------------------------------- |
+| `REDIS_URL` | —       | Redis connection URL. When unset, rate-limiting uses an in-memory store |
+
+### Scheduler tuning
+
+| Variable                     | Default  | Description                                         |
+| ---------------------------- | -------- | --------------------------------------------------- |
+| `SCHEDULER_POLL_MS`          | `60000`  | How often the scheduler reconciles active jobs (ms) |
+| `WEBHOOK_RETRY_POLL_MS`      | `10000`  | How often failed webhooks are retried (ms)          |
+| `WEBHOOK_RETRY_BATCH_SIZE`   | `50`     | Max webhook events retried per cycle                |
+| `MONITOR_INTERVAL_MS`        | `300000` | Treasury monitor cycle interval (ms)                |
+| `TREASURY_RUNWAY_ALERT_DAYS` | `7`      | Runway threshold that triggers a treasury alert     |
+| `SYNCER_POLL_MS`             | `10000`  | Syncer poll interval (ms)                           |
+
+### Secrets / Vault
+
+| Variable               | Default                 | Description                       |
+| ---------------------- | ----------------------- | --------------------------------- |
+| `VAULT_ADDR`           | `http://localhost:8200` | HashiCorp Vault address           |
+| `VAULT_TOKEN`          | —                       | Vault token                       |
+| `VAULT_SECRET_PATH`    | `quipay/keys`           | Path to secrets in Vault          |
+| `KEY_ROTATION_ENABLED` | `false`                 | Enable the key rotation scheduler |
+
+### Notifications / Integrations
+
+| Variable                      | Description                                                               |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| `SENDGRID_API_KEY`            | SendGrid API key for email delivery                                       |
+| `SENDGRID_FROM_EMAIL`         | Sender address (default `noreply@quipay.com`)                             |
+| `DISCORD_PUBLIC_KEY`          | Discord slash-command verification key                                    |
+| `SLACK_SIGNING_SECRET`        | Slack webhook signing secret                                              |
+| `OPENAI_API_KEY`              | OpenAI API key used by the `/ai` router                                   |
+| `KYB_API_URL` / `KYB_API_KEY` | External KYB provider. When absent, a deterministic mock verifier is used |
+
+### WebSocket
+
+| Variable       | Default                               | Description                                                             |
+| -------------- | ------------------------------------- | ----------------------------------------------------------------------- |
+| `JWT_SECRET`   | `dev-secret-key-change-in-production` | Secret used to verify WebSocket JWTs. **Must be changed in production** |
+| `FRONTEND_URL` | `http://localhost:5173`               | Allowed CORS origin for Socket.IO                                       |
+
+---
+
+## Testing
+
+### Unit tests
+
+Run all unit tests (excludes integration suites):
 
 ```bash
-# Test all contracts
-cargo test
-
-# Test specific contract
-cd contracts/payroll_vault
-cargo test
-
-# Frontend tests
 npm test
+# or explicitly
+npm run test:unit
 ```
 
-### PR Preview Deployments (Frontend)
+Tests live alongside source files as `*.test.ts` files or inside `src/__tests__/`. Jest is configured in `jest.config.js` with `ts-jest` and a 60-second timeout to accommodate slower container starts.
 
-This repository includes an optional **Frontend Preview Deploy** GitHub Action that builds the Vite dApp and deploys each pull request to **Cloudflare Pages** using Soroban **Testnet** defaults.
+Tests run **serially** (`maxWorkers: 1`) to avoid port or container conflicts.
 
-To enable preview deployments:
+### Integration tests
 
-1. **Create a Cloudflare Pages project** for the Quipay frontend (build command `npm run build`, output directory `dist`).
-2. **Add the following repository secrets** in GitHub:
-   - `CLOUDFLARE_API_TOKEN` – API token with “Cloudflare Pages — Edit” permission.
-   - `CLOUDFLARE_ACCOUNT_ID` – your Cloudflare account ID.
-   - `CLOUDFLARE_PAGES_PROJECT` – the Cloudflare Pages project name.
-3. Open or update a pull request that touches the frontend. The `Frontend Preview Deploy` workflow will:
-   - Build the dApp with `PUBLIC_STELLAR_*` env vars set to Testnet endpoints.
-   - Deploy a per-PR preview to Cloudflare Pages.
-   - **Comment on the PR with the preview URL** so reviewers can visually test the changes.
+Integration tests spin up a real PostgreSQL instance using **Testcontainers** (`@testcontainers/postgresql`). Docker must be running.
 
----
-
-## ⚙️ Environment Variables
-
-The frontend reads the following environment variables at build time. Copy `.env.example` to `.env` and adjust as needed:
-
-| Variable                     | Default                     | Description                                                   |
-| ---------------------------- | --------------------------- | ------------------------------------------------------------- |
-| `PUBLIC_STELLAR_NETWORK`     | `LOCAL`                     | Stellar network to connect to (`LOCAL`, `TESTNET`, `MAINNET`) |
-| `PUBLIC_STELLAR_RPC_URL`     | `http://localhost:8000/rpc` | Soroban RPC endpoint                                          |
-| `PUBLIC_STELLAR_HORIZON_URL` | `http://localhost:8000`     | Stellar Horizon endpoint                                      |
-| `VITE_SITE_URL`              | `https://quipay.app`        | Canonical site URL for metadata                               |
-| `VITE_API_BASE_URL`          | `http://localhost:3001`     | Backend API base URL used by frontend hooks (e.g. analytics)  |
-
-> **Docker Compose:** When running via `docker compose up`, `VITE_API_BASE_URL` is set automatically in the frontend service configuration. See `docker-compose.yml` for defaults.
-
----
-
-## 📁 Project Structure
-
+```bash
+npm run test:integration
 ```
-Quipay/
-├── contracts/              # Soroban smart contracts
-│   ├── payroll_stream/    # Streaming payment logic
-│   ├── payroll_vault/     # Treasury management
-│   ├── workforce_registry/ # Worker profiles (planned)
-│   └── automation_gateway/ # AI authorization (planned)
-├── src/                   # React frontend application
-│   ├── components/        # Reusable UI components
-│   ├── pages/             # Application pages
-│   ├── contracts/         # Generated contract clients
-│   └── hooks/             # Custom React hooks
-├── backend/               # Node.js AI agent (planned)
-├── packages/              # Generated TypeScript bindings
-├── docs/                  # Documentation
-│   ├── PRD.md            # Product Requirements
-│   └── design.md         # Technical design
-└── environments.toml      # Network configurations
+
+The `TestDatabase` helper in `src/__tests__/helpers/testcontainer.ts` manages the container lifecycle:
+
+- `setupTestDatabase()` — call in `beforeAll()`. Starts a `postgres:16-alpine` container (or re-uses an existing `DATABASE_URL` if set), applies `src/db/schema.sql`.
+- `cleanTestDatabase()` — call in `afterEach()` to truncate all tables for test isolation.
+- `teardownTestDatabase()` — call in `afterAll()` to stop the container.
+
+**Example integration test scaffold:**
+
+```typescript
+import {
+  setupTestDatabase,
+  cleanTestDatabase,
+  teardownTestDatabase,
+} from "../helpers/testcontainer";
+
+beforeAll(async () => {
+  await setupTestDatabase();
+});
+
+afterEach(async () => {
+  await cleanTestDatabase();
+});
+
+afterAll(async () => {
+  await teardownTestDatabase();
+});
+```
+
+#### Testcontainers requirements
+
+- Docker daemon must be running and reachable by the current user.
+- On macOS with Docker Desktop, ensure **"Allow the default Docker socket to be used"** is enabled in Docker Desktop → Settings → Advanced.
+- On CI, set `DOCKER_HOST` or use the `testcontainers.properties` approach if the Docker socket is non-standard.
+- If you already have a PostgreSQL instance you'd like to use instead, set `DATABASE_URL` before running — the helper will skip container creation and use that connection directly.
+
+### Watch mode
+
+```bash
+npm run test:watch
 ```
 
 ---
 
-## 📚 Documentation
+## Useful Scripts
 
-- **[Product Requirements (PRD)](docs/PRD.md)** - Complete product specification
-- **[Security Threat Model](docs/SECURITY_THREAT_MODEL.md)** - Formal analysis of protocol risks and mitigations
-- **[DAO Treasury Setup Guide](docs/DAO_TREASURY_SETUP.md)** - Multisig configuration for DAOs and enterprise clients
-- **[Design Document](docs/design.md)** - Technical architecture, roadmap & system design
-- **[GitHub Issues](https://github.com/LFGBanditLabs/Quipay/issues)** - Development tasks & progress
-
----
-
-## 💼 Use Cases
-
-<table>
-<tr>
-<td width="50%">
-
-### DAOs & Protocol Teams
-
-Transparent contributor compensation with automated scheduling and multi-sig control. [See DAO Setup Guide →](docs/DAO_TREASURY_SETUP.md)
-
-</td>
-<td width="50%">
-
-### Remote-First Companies
-
-Global payroll without intermediaries, supporting 100+ countries and multiple currencies
-
-</td>
-</tr>
-<tr>
-<td>
-
-### Web3 Startups
-
-Compliant contractor payments with built-in audit trails and flexible payment terms
-
-</td>
-<td>
-
-### Freelance Platforms
-
-Enable workers to access earnings instantly as they complete work milestones
-
-</td>
-</tr>
-</table>
-
----
-
-## 🛠️ Development Status
-
-**Current Phase:** MVP Development (Phase 1)
-
-### Completed ✅
-
-- [x] Project initialization with Scaffold Stellar
-- [x] Basic PayrollVault contract (deposit/payout)
-- [x] Comprehensive PRD and technical documentation
-- [x] 40+ GitHub issues with detailed specifications
-- [x] Development environment setup
-
-### In Progress 🚧
-
-- [ ] PayrollStream contract (streaming logic)
-- [ ] Treasury liability tracking
-- [ ] Frontend wallet integration
-- [ ] Real-time earnings calculator
-
-### Planned 📋
-
-- [ ] AI automation gateway
-- [ ] Worker registry
-- [ ] Analytics dashboard
-- [ ] Testnet deployment
-- [ ] Security audit
-
-Track our progress: [View Task Board](https://github.com/LFGBanditLabs/Quipay/issues)
-
----
-
-## 🔐 Security
-
-Security is paramount for payroll infrastructure. Quipay implements:
-
-- ✅ **Solvency Invariants** - Treasury balance ≥ liabilities enforced on-chain
-- ✅ **Authorization Checks** - Strict access control on all fund movements
-- ✅ **Multisig Support** - Treasury Vault supports multi-signature Stellar accounts for decentralized governance
-- ✅ **Double-Withdrawal Prevention** - Safe accounting prevents duplicate payouts
-- ✅ **Timestamp Validation** - Protection against manipulation attacks
-- ✅ **Formal Auditing** - Pre-mainnet security review (planned Phase 4)
-
-**Detailed Analysis:** See our [Security Threat Model](docs/SECURITY_THREAT_MODEL.md) for a comprehensive breakdown of risks.
-
-**Found a vulnerability?** See our [Security Policy](SECURITY.md)
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Quipay is building the future of payroll infrastructure.
-
-### Ways to Contribute
-
-- 🐛 **Report Bugs** - [Open an issue](https://github.com/LFGBanditLabs/Quipay/issues/new)
-- 💡 **Suggest Features** - Share your ideas
-- 📝 **Improve Documentation** - Help others understand Quipay
-- 💻 **Submit PRs** - Check our [good first issues](https://github.com/LFGBanditLabs/Quipay/labels/good%20first%20issue)
-
-See our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md)
-
----
-
-## 📊 Roadmap
-
-| Phase       | Milestone                            | Timeline | Status         |
-| ----------- | ------------------------------------ | -------- | -------------- |
-| **Phase 1** | Core Protocol (Streaming + Treasury) | Q1 2026  | 🚧 In Progress |
-| **Phase 2** | AI Automation Integration            | Q2 2026  | 📋 Planned     |
-| **Phase 3** | Compliance & Reporting               | Q3 2026  | 📋 Planned     |
-| **Phase 4** | Enterprise Features                  | Q4 2026  | 📋 Planned     |
-
----
-
-## 📜 License
-
-This project is licensed under the **Apache License 2.0** - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🔗 Links!
-
-<div align="center">
-
-[![GitHub](https://img.shields.io/badge/GitHub-LFGBanditLabs%2FQuipay-181717?logo=github)](https://github.com/LFGBanditLabs/Quipay)
-[![Stellar](https://img.shields.io/badge/Stellar-Learn%20More-7D00FF?logo=stellar)](https://stellar.org)
-[![Soroban Docs](https://img.shields.io/badge/Soroban-Documentation-00D4FF)](https://developers.stellar.org/docs/build/smart-contracts)
-[![Issues](https://img.shields.io/github/issues/LFGBanditLabs/Quipay)](https://github.com/LFGBanditLabs/Quipay/issues)
-
-</div>
-
----
-
-<div align="center">
-
-**Built with ❤️ on Stellar**
-
-_Empowering the future of work, one stream at a time_
-
-[⭐ Star us on GitHub](https://github.com/LFGBanditLabs/Quipay) • [🐦 Follow updates](#) • [💬 Join our community](#)
-
-</div>
+| Script                       | Description                                      |
+| ---------------------------- | ------------------------------------------------ |
+| `npm run dev`                | Start dev server with hot reload (`ts-node-dev`) |
+| `npm run build`              | Compile TypeScript to `dist/`                    |
+| `npm start`                  | Run compiled output (`dist/index.js`)            |
+| `npm run migrate`            | Apply pending Drizzle migrations                 |
+| `npm run migrate:status`     | Show migration status                            |
+| `npm run migrate:rollback`   | Roll back the last migration                     |
+| `npm run migration:generate` | Generate a new migration from schema changes     |
+| `npm run migration:push`     | Push schema directly (dev only)                  |
+| `npm run seed`               | Seed the database with sample data               |

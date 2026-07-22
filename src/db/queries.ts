@@ -52,6 +52,7 @@ export interface EmployerRecord {
   country_code: string;
   contact_name: string | null;
   contact_email: string | null;
+  stellar_address: string;
   verification_status: EmployerVerificationStatus;
   verification_reason: string | null;
   verification_metadata: Record<string, unknown>;
@@ -855,7 +856,7 @@ export const getEmployerById = async (
 ): Promise<EmployerRecord | null> => {
   if (!getPool()) return null;
   const res = await query<EmployerRecord>(
-    `SELECT * FROM employers WHERE employer_id = $1`,
+    `SELECT * FROM employers WHERE LOWER(employer_id) = LOWER($1)`,
     [employerId],
   );
   return res.rows[0] ?? null;
@@ -868,6 +869,7 @@ export const upsertEmployerVerification = async (params: {
   countryCode: string;
   contactName?: string;
   contactEmail?: string;
+  stellarAddress?: string;
   verificationStatus: EmployerVerificationStatus;
   verificationReason: string | null;
   verificationMetadata: Record<string, unknown>;
@@ -884,19 +886,21 @@ export const upsertEmployerVerification = async (params: {
         country_code,
         contact_name,
         contact_email,
+        stellar_address,
         verification_status,
         verification_reason,
         verification_metadata,
         verified_at,
         updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
       ON CONFLICT (employer_id) DO UPDATE
         SET business_name = EXCLUDED.business_name,
             registration_number = EXCLUDED.registration_number,
             country_code = EXCLUDED.country_code,
             contact_name = EXCLUDED.contact_name,
             contact_email = EXCLUDED.contact_email,
+            stellar_address = EXCLUDED.stellar_address,
             verification_status = EXCLUDED.verification_status,
             verification_reason = EXCLUDED.verification_reason,
             verification_metadata = EXCLUDED.verification_metadata,
@@ -904,12 +908,16 @@ export const upsertEmployerVerification = async (params: {
             updated_at = NOW()
       RETURNING *`,
     [
-      params.employerId,
+      params.employerId.toLowerCase(),
       params.businessName,
       params.registrationNumber,
       params.countryCode,
       params.contactName ?? null,
       params.contactEmail ?? null,
+      // Stellar addresses are canonically uppercase — store verbatim, a
+      // lowercased G... address is unusable for on-chain calls. May be null
+      // when the employer onboards with email login and links a wallet later.
+      params.stellarAddress ?? null,
       params.verificationStatus,
       params.verificationReason,
       params.verificationMetadata,
@@ -2075,4 +2083,225 @@ export const getSchedulerOverrides = async (params: {
   );
 
   return res.rows;
+};
+
+// ─── Accounts (Quipay ID) ───────────────────────────────────────────────────
+
+export interface AccountRecord {
+  id: number;
+  quipay_id: string;
+  privy_id: string | null;
+  email: string | null;
+  role: "user" | "admin" | "superadmin";
+  status: "active" | "suspended";
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface AccountWalletRecord {
+  id: number;
+  account_id: number;
+  chain: string;
+  address: string;
+  is_primary: boolean;
+  added_at: Date;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * Atomically resolves the account for a verified Privy DID, creating one on
+ * first sight. This is the only place an `accounts` row is ever created —
+ * there is no separate signup endpoint, matching how Privy itself mints the
+ * DID on first auth.
+ */
+export const getOrCreateAccountByPrivyId = async (
+  privyId: string,
+  email?: string | null,
+): Promise<AccountRecord> => {
+  if (!getPool()) {
+    throw new DatabaseError("Database not configured");
+  }
+  const res = await query<AccountRecord>(
+    `INSERT INTO accounts (privy_id, email)
+     VALUES ($1, $2)
+     ON CONFLICT (privy_id) WHERE privy_id IS NOT NULL DO UPDATE
+       SET email = COALESCE(EXCLUDED.email, accounts.email),
+           updated_at = NOW()
+     RETURNING *`,
+    [privyId, email ?? null],
+  );
+  return res.rows[0];
+};
+
+export const getAccountWallets = async (
+  accountId: number,
+): Promise<AccountWalletRecord[]> => {
+  if (!getPool()) return [];
+  const res = await query<AccountWalletRecord>(
+    `SELECT * FROM account_wallets WHERE account_id = $1 ORDER BY chain`,
+    [accountId],
+  );
+  return res.rows;
+};
+
+export const upsertAccountWallet = async (
+  accountId: number,
+  chain: string,
+  address: string,
+): Promise<AccountWalletRecord> => {
+  if (!getPool()) {
+    throw new DatabaseError("Database not configured");
+  }
+  const res = await query<AccountWalletRecord>(
+    `INSERT INTO account_wallets (account_id, chain, address)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (account_id, chain) DO UPDATE
+       SET address = EXCLUDED.address,
+           updated_at = NOW()
+     RETURNING *`,
+    [accountId, chain, address],
+  );
+  return res.rows[0];
+};
+
+export interface AccountByQuipayId {
+  accountId: number;
+  quipayId: string;
+  email: string | null;
+  walletStellar: string | null;
+  walletBase: string | null;
+}
+
+/**
+ * Resolves an account by its public QP ID (e.g. "QP100000042"), pulling
+ * whichever wallet addresses are on file — from the `workers` row if the
+ * account is a worker, or the `employers` row if it's an employer. Used to
+ * look someone up before adding them to a roster/stream, so the caller never
+ * has to be handed a raw wallet address.
+ */
+export const getAccountByQuipayId = async (
+  quipayId: string,
+): Promise<AccountByQuipayId | null> => {
+  if (!getPool()) return null;
+  const res = await query<{
+    account_id: number;
+    quipay_id: string;
+    email: string | null;
+    wallet_stellar: string | null;
+    wallet_base: string | null;
+  }>(
+    `SELECT
+       a.id AS account_id,
+       a.quipay_id,
+       a.email,
+       -- account_wallets is the authoritative source (Privy-provisioned);
+       -- fall back to legacy workers/employers columns.
+       COALESCE(aws.address, w.wallet_stellar, e.stellar_address) AS wallet_stellar,
+       COALESCE(awa.address, w.wallet_base,   e.wallet_base)      AS wallet_base
+     FROM accounts a
+     LEFT JOIN workers   w ON w.account_id = a.id
+     LEFT JOIN employers e ON e.account_id = a.id
+     LEFT JOIN account_wallets aws ON aws.account_id = a.id AND aws.chain = 'stellar'
+     LEFT JOIN account_wallets awa ON awa.account_id = a.id AND awa.chain = 'arc'
+     WHERE a.quipay_id = $1
+     LIMIT 1`,
+    [quipayId],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    accountId: row.account_id,
+    quipayId: row.quipay_id,
+    email: row.email,
+    walletStellar: row.wallet_stellar,
+    walletBase: row.wallet_base,
+  };
+};
+
+/**
+ * Finds a pre-existing `employers` row (created before real auth existed)
+ * that hasn't been claimed by any account yet, matched by verified email —
+ * lets a legacy business keep its KYB history instead of starting a
+ * duplicate record the first time its owner authenticates for real.
+ */
+export const findUnclaimedEmployerByEmail = async (
+  email: string,
+): Promise<EmployerRecord | null> => {
+  if (!getPool()) return null;
+  const res = await query<EmployerRecord>(
+    `SELECT * FROM employers
+     WHERE account_id IS NULL AND LOWER(contact_email) = LOWER($1)
+     LIMIT 1`,
+    [email],
+  );
+  return res.rows[0] ?? null;
+};
+
+export const linkLegacyEmployerToAccount = async (
+  employerId: string,
+  accountId: number,
+): Promise<void> => {
+  if (!getPool()) return;
+  await query(
+    `UPDATE employers SET account_id = $1 WHERE LOWER(employer_id) = LOWER($2)`,
+    [accountId, employerId],
+  );
+};
+
+export const getEmployerIdForAccount = async (
+  accountId: number,
+): Promise<string | null> => {
+  if (!getPool()) return null;
+  const res = await query<{ employer_id: string }>(
+    `SELECT employer_id FROM employers WHERE account_id = $1 LIMIT 1`,
+    [accountId],
+  );
+  return res.rows[0]?.employer_id ?? null;
+};
+
+export const updateAccountEmail = async (
+  accountId: number,
+  email: string,
+): Promise<void> => {
+  if (!getPool()) return;
+  await query(
+    `UPDATE accounts SET email = $1, updated_at = NOW() WHERE id = $2`,
+    [email, accountId],
+  );
+};
+
+/**
+ * Backfills the Stellar address onto this account's employer and/or worker
+ * rows when their embedded wallet is linked. Onboarding is wallet-optional, so
+ * an employer row can exist with a null stellar_address until the Privy wallet
+ * is provisioned — this heals that gap so invites/roster (which key on the
+ * employer's stellar address) work. Only fills nulls; never overwrites.
+ */
+export const backfillStellarAddressForAccount = async (
+  accountId: number,
+  stellarAddress: string,
+): Promise<void> => {
+  if (!getPool()) return;
+  // Match the employer either by its account_id link or by its employer_id
+  // equalling this account's quipay_id (case-insensitive) — the latter heals
+  // rows whose account_id link never got set. Fills nulls only; also sets the
+  // account_id link if it's missing.
+  await query(
+    `UPDATE employers e
+        SET stellar_address = COALESCE(NULLIF(e.stellar_address, ''), $1),
+            account_id = COALESCE(e.account_id, $2),
+            updated_at = NOW()
+       FROM accounts a
+      WHERE a.id = $2
+        AND (e.account_id = $2 OR LOWER(e.employer_id) = LOWER(a.quipay_id))`,
+    [stellarAddress, accountId],
+  );
+  await query(
+    `UPDATE workers
+        SET wallet_stellar = $1
+      WHERE account_id = $2
+        AND (wallet_stellar IS NULL OR wallet_stellar = '')`,
+    [stellarAddress, accountId],
+  );
 };

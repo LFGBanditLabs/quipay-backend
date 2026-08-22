@@ -3,30 +3,46 @@ import {
   getEnabledSchedulesDue,
   updateReportScheduleLastSent,
 } from "../db/payrollReportSchedule";
+import { sendReportEmailWithAttachment } from "../services/payrollReportService";
+import { generateReportData } from "../services/reportDataService";
 import {
-  sendPayrollReportEmail,
-  PayrollReportData,
-} from "../services/payrollReportService";
+  generatePayrollReport,
+  PayrollReportPdfData,
+  BrandingSettings,
+} from "../services/pdfGeneratorService";
+import { getBrandingForEmployer } from "../services/brandingService";
+import { pinProofToIPFS } from "../services/ipfsService";
+import { renderPayrollReportEmail } from "../templates/reportEmail";
 import { serviceLogger } from "../audit/serviceLogger";
 
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1000;
+
 /**
- * Calculate next send date based on frequency
+ * Calculate next send date based on frequency and optional day preferences.
+ * - weekly: next occurrence of dayOfWeek (1=Mon..7=Sun), defaults to next Monday
+ * - monthly: next occurrence of dayOfMonth (1-28), defaults to 1st of next month
  */
-const calculateNextSendDate = (frequency: "weekly" | "monthly"): Date => {
+const calculateNextSendDate = (
+  frequency: "weekly" | "monthly",
+  dayOfMonth?: number | null,
+  dayOfWeek?: number | null,
+): Date => {
   const now = new Date();
 
   if (frequency === "weekly") {
-    // Send every Monday at 9 AM
-    const nextMonday = new Date(now);
-    nextMonday.setDate(now.getDate() + ((1 - now.getDay() + 7) % 7 || 7));
-    nextMonday.setHours(9, 0, 0, 0);
-    return nextMonday;
+    const targetDay = dayOfWeek ?? 1; // default: Monday
+    const next = new Date(now);
+    const diff = (targetDay - now.getDay() + 7) % 7 || 7;
+    next.setDate(now.getDate() + diff);
+    next.setHours(9, 0, 0, 0);
+    return next;
   } else {
-    // Send on 1st of next month at 9 AM
+    const targetDay = dayOfMonth ?? 1;
     const nextMonth = new Date(
       now.getFullYear(),
       now.getMonth() + 1,
-      1,
+      Math.min(targetDay, 28),
       9,
       0,
       0,
@@ -36,25 +52,124 @@ const calculateNextSendDate = (frequency: "weekly" | "monthly"): Date => {
 };
 
 /**
- * Generate mock report data (in production, this would query the database)
+ * Sleep helper for retry backoff
  */
-const generateReportData = async (
-  employerId: string,
-): Promise<PayrollReportData> => {
-  const now = new Date();
-  const periodStart = new Date(now);
-  periodStart.setDate(now.getDate() - 30);
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
-  // Mock data - replace with actual DB queries
-  return {
+/**
+ * Generate and send a single report with retry logic.
+ */
+export const generateAndSendReport = async (
+  employerId: string,
+  email: string,
+  frequency: string,
+  includeSections: string[],
+  format: string,
+): Promise<{ sent: boolean; ipfsUrl?: string }> => {
+  // Calculate reporting period
+  const now = new Date();
+  const periodEnd = new Date(now);
+  const periodStart = new Date(now);
+
+  if (frequency === "weekly") {
+    periodStart.setDate(now.getDate() - 7);
+  } else {
+    periodStart.setMonth(now.getMonth() - 1);
+  }
+
+  // 1. Query report data
+  const reportData = await generateReportData(
     employerId,
     periodStart,
-    periodEnd: now,
-    totalPaid: "0",
-    activeStreams: 0,
-    completedStreams: 0,
-    workers: [],
-  };
+    periodEnd,
+  );
+
+  // 2. Get employer branding
+  let branding: BrandingSettings;
+  try {
+    branding = await getBrandingForEmployer(employerId);
+  } catch {
+    branding = {
+      logoUrl: null,
+      primaryColor: "#2563eb",
+      secondaryColor: "#64748b",
+    };
+  }
+
+  // 3. Generate PDF (if format includes pdf)
+  let pdfBuffer: Buffer | null = null;
+  if (format === "pdf" || format === "both") {
+    const pdfData: PayrollReportPdfData = {
+      employerId: reportData.employerId,
+      periodStart: reportData.periodStart,
+      periodEnd: reportData.periodEnd,
+      totalPaid: reportData.totalPaid,
+      activeStreams: reportData.activeStreams,
+      completedStreams: reportData.completedStreams,
+      workers: reportData.workers,
+      vaultActivity: reportData.vaultActivity,
+      streamEvents: reportData.streamEvents,
+    };
+    pdfBuffer = await generatePayrollReport(pdfData, branding);
+  }
+
+  // 4. Pin to IPFS
+  let ipfsUrl: string | undefined;
+  try {
+    const proof = {
+      schemaVersion: "1.0",
+      streamId: 0,
+      employerAddress: employerId,
+      workerAddress: "",
+      token: "XLM",
+      totalAmount: reportData.totalPaid,
+      withdrawnAmount: "0",
+      startTs: Math.floor(periodStart.getTime() / 1000),
+      endTs: Math.floor(periodEnd.getTime() / 1000),
+      network: "stellar",
+      contractId: "",
+    };
+    const pinResult = await pinProofToIPFS(proof as any);
+    ipfsUrl = pinResult.gatewayUrl;
+  } catch (err) {
+    await serviceLogger.warn(
+      "PayrollReport",
+      "IPFS pinning failed, continuing without archive",
+      { employerId, error: (err as Error).message },
+    );
+  }
+
+  // 5. Build email
+  const { subject, html } = renderPayrollReportEmail(reportData, ipfsUrl);
+
+  // 6. Send with retry
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const sent = await sendReportEmailWithAttachment(
+        email,
+        subject,
+        html,
+        pdfBuffer,
+      );
+
+      if (sent) {
+        return { sent: true, ipfsUrl };
+      }
+    } catch (err) {
+      await serviceLogger.warn(
+        "PayrollReport",
+        `Email delivery attempt ${attempt}/${MAX_RETRIES} failed`,
+        { employerId, email, error: (err as Error).message },
+      );
+
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+      }
+    }
+  }
+
+  return { sent: false, ipfsUrl };
 };
 
 /**
@@ -66,13 +181,24 @@ export const processScheduledReports = async (): Promise<void> => {
 
     for (const schedule of schedules) {
       try {
-        const reportData = await generateReportData(schedule.employerId);
-
-        const sent = await sendPayrollReportEmail(schedule.email, reportData);
+        const { sent, ipfsUrl } = await generateAndSendReport(
+          schedule.employerId,
+          schedule.email,
+          schedule.frequency,
+          schedule.includeSections ?? [
+            "summary",
+            "streams",
+            "withdrawals",
+            "vault_balance",
+          ],
+          schedule.format ?? "pdf",
+        );
 
         if (sent) {
           const nextSendAt = calculateNextSendDate(
             schedule.frequency as "weekly" | "monthly",
+            schedule.dayOfMonth,
+            schedule.dayOfWeek,
           );
           await updateReportScheduleLastSent(schedule.id, nextSendAt);
 
@@ -83,13 +209,21 @@ export const processScheduledReports = async (): Promise<void> => {
               scheduleId: schedule.id,
               employerId: schedule.employerId,
               frequency: schedule.frequency,
+              ipfsUrl,
             },
+          );
+        } else {
+          await serviceLogger.error(
+            "PayrollReport",
+            `All ${MAX_RETRIES} delivery attempts failed for schedule ${schedule.id}`,
+            new Error("Email delivery failed after retries"),
+            { scheduleId: schedule.id, employerId: schedule.employerId },
           );
         }
       } catch (error: any) {
         await serviceLogger.error(
           "PayrollReport",
-          `Failed to send report for schedule ${schedule.id}`,
+          `Failed to generate report for schedule ${schedule.id}`,
           error,
           {
             scheduleId: schedule.id,
@@ -119,7 +253,6 @@ export const startPayrollReportScheduler = (): void => {
     return;
   }
 
-  // Run daily at midnight
   reportCronJob = cron.schedule("0 0 * * *", async () => {
     console.log("[PayrollReportScheduler] Processing scheduled reports...");
     await processScheduledReports();

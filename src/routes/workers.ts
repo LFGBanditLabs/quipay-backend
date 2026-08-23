@@ -35,7 +35,9 @@ workersRouter.get("/me/streams", async (req, res) => {
       return;
     }
     const worker = await pool.query(
-      `SELECT wallet_stellar, wallet_base FROM workers WHERE privy_id = $1 LIMIT 1`,
+      `SELECT wallet_stellar, wallet_base,
+              wallet_stellar_verified, wallet_base_verified
+       FROM workers WHERE privy_id = $1 LIMIT 1`,
       [privyId],
     );
 
@@ -44,18 +46,25 @@ workersRouter.get("/me/streams", async (req, res) => {
       return;
     }
 
-    const { wallet_stellar, wallet_base } = worker.rows[0];
+    const { wallet_stellar, wallet_base,
+            wallet_stellar_verified, wallet_base_verified } = worker.rows[0];
+
+    // Only query streams for verified wallets
+    const stellarAddr =
+      wallet_stellar && wallet_stellar_verified ? wallet_stellar : null;
+    const baseAddr =
+      wallet_base && wallet_base_verified ? wallet_base : null;
     const now = Math.floor(Date.now() / 1000);
 
     // ── Stellar streams (from synced DB) ──────────────────────────────────
-    const stellarStreams = wallet_stellar
+    const stellarStreams = stellarAddr
       ? await pool.query(
           `SELECT stream_id, employer_address, worker_address, token,
                   rate_per_second, start_ts, end_ts, cliff_ts,
                   total_withdrawn, status, chain
            FROM payroll_streams
            WHERE worker_address = $1 AND status = 'active'`,
-          [wallet_stellar],
+          [stellarAddr],
         )
       : { rows: [] };
 
@@ -79,9 +88,9 @@ workersRouter.get("/me/streams", async (req, res) => {
 
     // ── Base streams (live from chain) ────────────────────────────────────
     let baseFormatted: any[] = [];
-    if (wallet_base) {
+    if (baseAddr) {
       const baseStreamIds = await getWorkerStreamsBase(
-        wallet_base as `0x${string}`,
+        baseAddr as `0x${string}`,
       );
       const baseDetails = await Promise.all(
         baseStreamIds.map((id) => getStreamBase(id as `0x${string}`)),
@@ -134,7 +143,7 @@ workersRouter.get("/me/balance", async (req, res) => {
       return;
     }
     const worker = await pool.query(
-      `SELECT wallet_stellar FROM workers WHERE privy_id = $1 LIMIT 1`,
+      `SELECT wallet_stellar, wallet_stellar_verified FROM workers WHERE privy_id = $1 LIMIT 1`,
       [privyId],
     );
 
@@ -143,7 +152,13 @@ workersRouter.get("/me/balance", async (req, res) => {
       return;
     }
 
-    const { wallet_stellar } = worker.rows[0];
+    const { wallet_stellar, wallet_stellar_verified } = worker.rows[0];
+
+    if (!wallet_stellar || !wallet_stellar_verified) {
+      res.json({ available: 0, streaming: 0, withdrawn: 0, currency: "USDC" });
+      return;
+    }
+
     const now = Math.floor(Date.now() / 1000);
 
     const streams = await pool.query(

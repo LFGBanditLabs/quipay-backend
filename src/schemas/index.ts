@@ -29,3 +29,10 @@ export {
   type EmployerOnboardingInput,
   type EmployerTreasuryDepositInput,
 } from "./employers.schema";
+
+export {
+  walletChallengeSchema,
+  walletVerifySchema,
+  type WalletChallengeInput,
+  type WalletVerifyInput,
+} from "./wallets.schema";

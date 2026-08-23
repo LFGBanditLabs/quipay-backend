@@ -1,8 +1,18 @@
 import { Router } from "express";
 import { requirePrivyAuth } from "../middleware/privyAuth";
+import { validateRequest } from "../middleware/validation";
 import { getWorkerStreamsBase, getStreamBase } from "../services/baseChain";
 import { getPool } from "../db/pool";
 import { logger } from "../logger";
+import {
+  createChallenge,
+  verifyAndLink,
+  getWalletVerificationStatus,
+} from "../services/walletVerification";
+import {
+  walletChallengeSchema,
+  walletVerifySchema,
+} from "../schemas/wallets.schema";
 
 export const workersRouter = Router();
 
@@ -25,7 +35,9 @@ workersRouter.get("/me/streams", async (req, res) => {
       return;
     }
     const worker = await pool.query(
-      `SELECT wallet_stellar, wallet_base FROM workers WHERE privy_id = $1 LIMIT 1`,
+      `SELECT wallet_stellar, wallet_base,
+              wallet_stellar_verified, wallet_base_verified
+       FROM workers WHERE privy_id = $1 LIMIT 1`,
       [privyId],
     );
 
@@ -34,18 +46,28 @@ workersRouter.get("/me/streams", async (req, res) => {
       return;
     }
 
-    const { wallet_stellar, wallet_base } = worker.rows[0];
+    const {
+      wallet_stellar,
+      wallet_base,
+      wallet_stellar_verified,
+      wallet_base_verified,
+    } = worker.rows[0];
+
+    // Only query streams for verified wallets
+    const stellarAddr =
+      wallet_stellar && wallet_stellar_verified ? wallet_stellar : null;
+    const baseAddr = wallet_base && wallet_base_verified ? wallet_base : null;
     const now = Math.floor(Date.now() / 1000);
 
     // ── Stellar streams (from synced DB) ──────────────────────────────────
-    const stellarStreams = wallet_stellar
+    const stellarStreams = stellarAddr
       ? await pool.query(
           `SELECT stream_id, employer_address, worker_address, token,
                   rate_per_second, start_ts, end_ts, cliff_ts,
                   total_withdrawn, status, chain
            FROM payroll_streams
            WHERE worker_address = $1 AND status = 'active'`,
-          [wallet_stellar],
+          [stellarAddr],
         )
       : { rows: [] };
 
@@ -69,9 +91,9 @@ workersRouter.get("/me/streams", async (req, res) => {
 
     // ── Base streams (live from chain) ────────────────────────────────────
     let baseFormatted: any[] = [];
-    if (wallet_base) {
+    if (baseAddr) {
       const baseStreamIds = await getWorkerStreamsBase(
-        wallet_base as `0x${string}`,
+        baseAddr as `0x${string}`,
       );
       const baseDetails = await Promise.all(
         baseStreamIds.map((id) => getStreamBase(id as `0x${string}`)),
@@ -124,7 +146,7 @@ workersRouter.get("/me/balance", async (req, res) => {
       return;
     }
     const worker = await pool.query(
-      `SELECT wallet_stellar FROM workers WHERE privy_id = $1 LIMIT 1`,
+      `SELECT wallet_stellar, wallet_stellar_verified FROM workers WHERE privy_id = $1 LIMIT 1`,
       [privyId],
     );
 
@@ -133,7 +155,13 @@ workersRouter.get("/me/balance", async (req, res) => {
       return;
     }
 
-    const { wallet_stellar } = worker.rows[0];
+    const { wallet_stellar, wallet_stellar_verified } = worker.rows[0];
+
+    if (!wallet_stellar || !wallet_stellar_verified) {
+      res.json({ available: 0, streaming: 0, withdrawn: 0, currency: "USDC" });
+      return;
+    }
+
     const now = Math.floor(Date.now() / 1000);
 
     const streams = await pool.query(
@@ -196,6 +224,81 @@ workersRouter.post("/me/register", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     logger.error({ err }, "Failed to register worker");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /me/wallets/challenge
+ * Request a challenge nonce for wallet ownership verification.
+ */
+workersRouter.post(
+  "/me/wallets/challenge",
+  validateRequest({ body: walletChallengeSchema }),
+  async (req, res) => {
+    try {
+      const privyId = req.privyUser!.sub;
+      const { address, chain } = req.body;
+
+      const { challenge, expiresAt } = await createChallenge(
+        address,
+        chain,
+        privyId,
+      );
+
+      res.json({ challenge, expiresAt: expiresAt.toISOString() });
+    } catch (err) {
+      logger.error({ err }, "Failed to create wallet challenge");
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * POST /me/wallets/verify
+ * Verify a signed challenge and link the wallet to the authenticated worker.
+ */
+workersRouter.post(
+  "/me/wallets/verify",
+  validateRequest({ body: walletVerifySchema }),
+  async (req, res) => {
+    try {
+      const privyId = req.privyUser!.sub;
+      const { address, chain, challenge, signature } = req.body;
+
+      const result = await verifyAndLink(
+        address,
+        chain,
+        challenge,
+        signature,
+        privyId,
+      );
+
+      if (!result.success) {
+        const status = result.error?.includes("expired") ? 410 : 400;
+        res.status(status).json({ error: result.error });
+        return;
+      }
+
+      res.json({ success: true, verified: true });
+    } catch (err) {
+      logger.error({ err }, "Failed to verify wallet");
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * GET /me/wallets/status
+ * Check verification status of linked wallets.
+ */
+workersRouter.get("/me/wallets/status", async (req, res) => {
+  try {
+    const privyId = req.privyUser!.sub;
+    const status = await getWalletVerificationStatus(privyId);
+    res.json(status);
+  } catch (err) {
+    logger.error({ err }, "Failed to get wallet verification status");
     res.status(500).json({ error: "Internal server error" });
   }
 });

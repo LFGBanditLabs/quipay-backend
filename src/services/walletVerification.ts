@@ -51,13 +51,13 @@ async function verifyStellarSignature(
     const rawKey = StrKey.decodeEd25519PublicKey(address);
 
     // Decode the signature from base64
-    const sigBuf = Buffer.from(signature, "base64");
+    const sigBuf = new Uint8Array(Buffer.from(signature, "base64"));
 
     // The client signs the challenge string as a raw message.
     // Stellar signMessage produces a standard ed25519 signature over the UTF-8 bytes.
     const cryptoKey = await crypto.subtle.importKey(
       "raw",
-      rawKey,
+      new Uint8Array(rawKey),
       { name: "Ed25519" },
       false,
       ["verify"],

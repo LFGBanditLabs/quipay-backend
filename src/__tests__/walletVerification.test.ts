@@ -41,7 +41,9 @@ describe("walletVerification", () => {
 
       expect(challenge).toMatch(/^quipay-verify:[a-f0-9]{64}$/);
       expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
-      expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 5 * 60 * 1000 + 1000);
+      expect(expiresAt.getTime()).toBeLessThanOrEqual(
+        Date.now() + 5 * 60 * 1000 + 1000,
+      );
 
       // Should delete old challenges first
       expect(mockQuery).toHaveBeenCalledWith(
@@ -52,7 +54,12 @@ describe("walletVerification", () => {
       // Should insert new challenge
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO wallet_challenges"),
-        expect.arrayContaining(["GABC123DEF456", "stellar", expect.any(String), "did:privy:test123"]),
+        expect.arrayContaining([
+          "GABC123DEF456",
+          "stellar",
+          expect.any(String),
+          "did:privy:test123",
+        ]),
       );
     });
   });
@@ -177,7 +184,9 @@ describe("walletVerification", () => {
       const count = await cleanupExpiredChallenges();
       expect(count).toBe(3);
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining("DELETE FROM wallet_challenges WHERE expires_at"),
+        expect.stringContaining(
+          "DELETE FROM wallet_challenges WHERE expires_at",
+        ),
       );
     });
   });

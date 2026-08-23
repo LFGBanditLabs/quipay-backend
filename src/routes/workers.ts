@@ -46,14 +46,17 @@ workersRouter.get("/me/streams", async (req, res) => {
       return;
     }
 
-    const { wallet_stellar, wallet_base,
-            wallet_stellar_verified, wallet_base_verified } = worker.rows[0];
+    const {
+      wallet_stellar,
+      wallet_base,
+      wallet_stellar_verified,
+      wallet_base_verified,
+    } = worker.rows[0];
 
     // Only query streams for verified wallets
     const stellarAddr =
       wallet_stellar && wallet_stellar_verified ? wallet_stellar : null;
-    const baseAddr =
-      wallet_base && wallet_base_verified ? wallet_base : null;
+    const baseAddr = wallet_base && wallet_base_verified ? wallet_base : null;
     const now = Math.floor(Date.now() / 1000);
 
     // ── Stellar streams (from synced DB) ──────────────────────────────────
@@ -272,8 +275,7 @@ workersRouter.post(
       );
 
       if (!result.success) {
-        const status =
-          result.error?.includes("expired") ? 410 : 400;
+        const status = result.error?.includes("expired") ? 410 : 400;
         res.status(status).json({ error: result.error });
         return;
       }

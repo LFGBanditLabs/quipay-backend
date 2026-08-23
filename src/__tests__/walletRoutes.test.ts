@@ -30,8 +30,7 @@ jest.mock("../middleware/privyAuth", () => ({
 
 jest.mock("../middleware/validation", () => ({
   validateRequest:
-    (schemas: { body?: any }) =>
-    async (req: any, res: any, next: any) => {
+    (schemas: { body?: any }) => async (req: any, res: any, next: any) => {
       if (schemas.body) {
         try {
           req.body = await schemas.body.parseAsync(req.body);
@@ -51,7 +50,8 @@ jest.mock("../middleware/validation", () => ({
 const mockQuery = pool.query as jest.Mock;
 const mockCreateChallenge = walletVerification.createChallenge as jest.Mock;
 const mockVerifyAndLink = walletVerification.verifyAndLink as jest.Mock;
-const mockGetWalletStatus = walletVerification.getWalletVerificationStatus as jest.Mock;
+const mockGetWalletStatus =
+  walletVerification.getWalletVerificationStatus as jest.Mock;
 
 const app = express();
 app.use(express.json());
@@ -97,14 +97,12 @@ describe("Wallet verification routes", () => {
     it("returns success on valid verification", async () => {
       mockVerifyAndLink.mockResolvedValueOnce({ success: true });
 
-      const res = await request(app)
-        .post("/workers/me/wallets/verify")
-        .send({
-          address: "GABC123DEF456",
-          chain: "stellar",
-          challenge: "quipay-verify:abc123",
-          signature: "valid_signature_base64",
-        });
+      const res = await request(app).post("/workers/me/wallets/verify").send({
+        address: "GABC123DEF456",
+        chain: "stellar",
+        challenge: "quipay-verify:abc123",
+        signature: "valid_signature_base64",
+      });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -117,14 +115,12 @@ describe("Wallet verification routes", () => {
         error: "Signature verification failed.",
       });
 
-      const res = await request(app)
-        .post("/workers/me/wallets/verify")
-        .send({
-          address: "GABC123DEF456",
-          chain: "stellar",
-          challenge: "quipay-verify:abc123",
-          signature: "bad_signature_12345",
-        });
+      const res = await request(app).post("/workers/me/wallets/verify").send({
+        address: "GABC123DEF456",
+        chain: "stellar",
+        challenge: "quipay-verify:abc123",
+        signature: "bad_signature_12345",
+      });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("Signature verification failed");
@@ -136,14 +132,12 @@ describe("Wallet verification routes", () => {
         error: "Challenge expired. Request a new one.",
       });
 
-      const res = await request(app)
-        .post("/workers/me/wallets/verify")
-        .send({
-          address: "GABC123DEF456",
-          chain: "stellar",
-          challenge: "quipay-verify:abc123",
-          signature: "a-valid-signature",
-        });
+      const res = await request(app).post("/workers/me/wallets/verify").send({
+        address: "GABC123DEF456",
+        chain: "stellar",
+        challenge: "quipay-verify:abc123",
+        signature: "a-valid-signature",
+      });
 
       expect(res.status).toBe(410);
     });

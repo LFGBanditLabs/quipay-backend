@@ -43,9 +43,8 @@ async function verifyStellarSignature(
 ): Promise<boolean> {
   try {
     // Dynamic import to avoid loading stellar-sdk when not needed
-    const { StrKey, TransactionBuilder, Networks, Transaction } = await import(
-      "@stellar/stellar-sdk"
-    );
+    const { StrKey, TransactionBuilder, Networks, Transaction } =
+      await import("@stellar/stellar-sdk");
 
     // Decode the claimed public key
     const rawKey = StrKey.decodeEd25519PublicKey(address);
@@ -125,14 +124,19 @@ export async function verifyAndLink(
   );
 
   if (!result.rows.length) {
-    return { success: false, error: "No pending challenge found. Request a new one." };
+    return {
+      success: false,
+      error: "No pending challenge found. Request a new one.",
+    };
   }
 
   const stored = result.rows[0];
 
   // Check expiry
   if (new Date(stored.expires_at) < new Date()) {
-    await pool.query(`DELETE FROM wallet_challenges WHERE id = $1`, [stored.id]);
+    await pool.query(`DELETE FROM wallet_challenges WHERE id = $1`, [
+      stored.id,
+    ]);
     return { success: false, error: "Challenge expired. Request a new one." };
   }
 

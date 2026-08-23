@@ -1,8 +1,18 @@
 import { Router } from "express";
 import { requirePrivyAuth } from "../middleware/privyAuth";
+import { validateRequest } from "../middleware/validation";
 import { getWorkerStreamsBase, getStreamBase } from "../services/baseChain";
 import { getPool } from "../db/pool";
 import { logger } from "../logger";
+import {
+  createChallenge,
+  verifyAndLink,
+  getWalletVerificationStatus,
+} from "../services/walletVerification";
+import {
+  walletChallengeSchema,
+  walletVerifySchema,
+} from "../schemas/wallets.schema";
 
 export const workersRouter = Router();
 
@@ -196,6 +206,82 @@ workersRouter.post("/me/register", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     logger.error({ err }, "Failed to register worker");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /me/wallets/challenge
+ * Request a challenge nonce for wallet ownership verification.
+ */
+workersRouter.post(
+  "/me/wallets/challenge",
+  validateRequest({ body: walletChallengeSchema }),
+  async (req, res) => {
+    try {
+      const privyId = req.privyUser!.sub;
+      const { address, chain } = req.body;
+
+      const { challenge, expiresAt } = await createChallenge(
+        address,
+        chain,
+        privyId,
+      );
+
+      res.json({ challenge, expiresAt: expiresAt.toISOString() });
+    } catch (err) {
+      logger.error({ err }, "Failed to create wallet challenge");
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * POST /me/wallets/verify
+ * Verify a signed challenge and link the wallet to the authenticated worker.
+ */
+workersRouter.post(
+  "/me/wallets/verify",
+  validateRequest({ body: walletVerifySchema }),
+  async (req, res) => {
+    try {
+      const privyId = req.privyUser!.sub;
+      const { address, chain, challenge, signature } = req.body;
+
+      const result = await verifyAndLink(
+        address,
+        chain,
+        challenge,
+        signature,
+        privyId,
+      );
+
+      if (!result.success) {
+        const status =
+          result.error?.includes("expired") ? 410 : 400;
+        res.status(status).json({ error: result.error });
+        return;
+      }
+
+      res.json({ success: true, verified: true });
+    } catch (err) {
+      logger.error({ err }, "Failed to verify wallet");
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * GET /me/wallets/status
+ * Check verification status of linked wallets.
+ */
+workersRouter.get("/me/wallets/status", async (req, res) => {
+  try {
+    const privyId = req.privyUser!.sub;
+    const status = await getWalletVerificationStatus(privyId);
+    res.json(status);
+  } catch (err) {
+    logger.error({ err }, "Failed to get wallet verification status");
     res.status(500).json({ error: "Internal server error" });
   }
 });

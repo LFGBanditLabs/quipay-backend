@@ -59,8 +59,11 @@ jobs:
       - name: Pull stellar-quickstart image
         run: docker pull stellar/quickstart:testing
       - name: Security audit
-        # --audit-level=critical: the one remaining high is xlsx (SheetJS, no upstream fix).
-        # All critical vulnerabilities have been resolved via package.json overrides.
+        # --audit-level=critical: remaining highs are in unmaintained dredd (dev-only
+        # contract tests, not run in this job) and axios via @circle-fin/circle-sdk.
+        # Criticals are pinned via package.json overrides (form-data, json-pointer,
+        # jsonpath-plus, minimist) and sanitize-html >= 2.17.4 (CVE-2026-44990).
+        # Do not `npm audit fix --force`: it would downgrade dredd 14 -> 4.9.3.
         run: npm audit --audit-level=critical
       - run: npm run lint
       - name: Check formatting

@@ -26,12 +26,14 @@ beforeEach(() => {
 });
 
 describe("POST /reports/schedule", () => {
-  it("creates a schedule with valid input", async () => {
+  it("creates a schedule with valid input using email", async () => {
     const mockSchedule = {
       id: 1,
       employerId: "owner-1",
       frequency: "monthly",
       email: "test@example.com",
+      dayOfMonth: 1,
+      dayOfWeek: null,
       includeSections: ["summary", "streams"],
       format: "pdf",
       enabled: true,
@@ -47,6 +49,7 @@ describe("POST /reports/schedule", () => {
       .send({
         frequency: "monthly",
         email: "test@example.com",
+        dayOfMonth: 1,
         includeSections: ["summary", "streams"],
       });
 
@@ -56,6 +59,43 @@ describe("POST /reports/schedule", () => {
       expect.objectContaining({
         frequency: "monthly",
         email: "test@example.com",
+        dayOfMonth: 1,
+      }),
+    );
+  });
+
+  it("creates a quarterly schedule with emailTo array and format both", async () => {
+    const mockSchedule = {
+      id: 2,
+      employerId: "owner-1",
+      frequency: "quarterly",
+      email: "finance@company.com, cfo@company.com",
+      dayOfMonth: 15,
+      includeSections: ["summary", "streams", "withdrawals", "vault_balance"],
+      format: "both",
+      enabled: true,
+    };
+    (reportScheduleDb.createReportSchedule as jest.Mock).mockResolvedValue(
+      mockSchedule,
+    );
+
+    const res = await request(app)
+      .post("/reports/schedule")
+      .send({
+        frequency: "quarterly",
+        emailTo: ["finance@company.com", "cfo@company.com"],
+        dayOfMonth: 15,
+        format: "both",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.schedule.frequency).toBe("quarterly");
+    expect(reportScheduleDb.createReportSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        frequency: "quarterly",
+        email: "finance@company.com, cfo@company.com",
+        dayOfMonth: 15,
+        format: "both",
       }),
     );
   });
@@ -83,6 +123,30 @@ describe("POST /reports/schedule", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Invalid email");
   });
+
+  it("returns 400 for invalid dayOfMonth", async () => {
+    const res = await request(app)
+      .post("/reports/schedule")
+      .send({ frequency: "monthly", email: "a@b.com", dayOfMonth: 35 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Invalid dayOfMonth");
+  });
+
+  it("returns 400 for invalid dayOfWeek", async () => {
+    const res = await request(app)
+      .post("/reports/schedule")
+      .send({ frequency: "weekly", email: "a@b.com", dayOfWeek: 8 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Invalid dayOfWeek");
+  });
+
+  it("returns 400 for invalid format", async () => {
+    const res = await request(app)
+      .post("/reports/schedule")
+      .send({ frequency: "monthly", email: "a@b.com", format: "xml" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Invalid format");
+  });
 });
 
 describe("GET /reports/schedule", () => {
@@ -99,6 +163,28 @@ describe("GET /reports/schedule", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.schedules).toHaveLength(2);
+  });
+});
+
+describe("GET /reports/schedule/:id", () => {
+  it("returns schedule details when owner matches", async () => {
+    (reportScheduleDb.getReportScheduleById as jest.Mock).mockResolvedValue({
+      id: 5,
+      employerId: "owner-1",
+      frequency: "quarterly",
+      email: "finance@company.com",
+    });
+
+    const res = await request(app).get("/reports/schedule/5");
+    expect(res.status).toBe(200);
+    expect(res.body.schedule.id).toBe(5);
+  });
+
+  it("returns 404 when schedule not found or not owned", async () => {
+    (reportScheduleDb.getReportScheduleById as jest.Mock).mockResolvedValue(null);
+
+    const res = await request(app).get("/reports/schedule/999");
+    expect(res.status).toBe(404);
   });
 });
 
@@ -151,24 +237,39 @@ describe("DELETE /reports/schedule/:id", () => {
 });
 
 describe("PUT /reports/schedule/:id", () => {
-  it("updates a schedule", async () => {
+  it("updates a schedule with new frequency, emailTo, and dayOfMonth", async () => {
     (reportScheduleDb.getReportScheduleById as jest.Mock).mockResolvedValue({
       id: 1,
       employerId: "owner-1",
+      frequency: "monthly",
+      email: "old@example.com",
+      dayOfMonth: 1,
     });
     (reportScheduleDb.updateReportSchedule as jest.Mock).mockResolvedValue({
       id: 1,
       employerId: "owner-1",
-      frequency: "weekly",
+      frequency: "quarterly",
       email: "new@example.com",
+      dayOfMonth: 15,
+      format: "both",
     });
 
     const res = await request(app)
       .put("/reports/schedule/1")
-      .send({ email: "new@example.com", frequency: "weekly" });
+      .send({ emailTo: "new@example.com", frequency: "quarterly", dayOfMonth: 15, format: "both" });
 
     expect(res.status).toBe(200);
     expect(res.body.schedule.email).toBe("new@example.com");
+    expect(reportScheduleDb.updateReportSchedule).toHaveBeenCalledWith(
+      1,
+      "owner-1",
+      expect.objectContaining({
+        frequency: "quarterly",
+        email: "new@example.com",
+        dayOfMonth: 15,
+        format: "both",
+      }),
+    );
   });
 
   it("returns 404 for non-owned schedule", async () => {
@@ -213,6 +314,7 @@ describe("POST /reports/schedule/:id/test", () => {
     (reportScheduler.generateAndSendReport as jest.Mock).mockResolvedValue({
       sent: true,
       ipfsUrl: "https://ipfs.io/ipfs/Qm123",
+      ipfsHash: "Qm123",
     });
 
     const res = await request(app).post("/reports/schedule/1/test");
@@ -220,6 +322,7 @@ describe("POST /reports/schedule/:id/test", () => {
     expect(res.status).toBe(200);
     expect(res.body.sent).toBe(true);
     expect(res.body.ipfsUrl).toContain("ipfs");
+    expect(res.body.ipfsHash).toBe("Qm123");
   });
 
   it("reports when email delivery fails", async () => {
@@ -253,3 +356,27 @@ describe("POST /reports/schedule/:id/test", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("GET /reports/history", () => {
+  it("returns generated reports history for employer", async () => {
+    (
+      reportScheduleDb.getGeneratedReportsByEmployer as jest.Mock
+    ).mockResolvedValue([
+      {
+        id: 1,
+        employerId: "owner-1",
+        frequency: "monthly",
+        format: "pdf",
+        status: "success",
+        ipfsHash: "Qm123",
+      },
+    ]);
+
+    const res = await request(app).get("/reports/history");
+
+    expect(res.status).toBe(200);
+    expect(res.body.history).toHaveLength(1);
+    expect(res.body.history[0].ipfsHash).toBe("Qm123");
+  });
+});
+

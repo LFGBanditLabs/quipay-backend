@@ -44,6 +44,10 @@ import {
   sendWorkerLowRunwayNotification,
   sendStreamEndingNotification,
 } from "../notifier/notifier";
+import {
+  startPayrollReportScheduler,
+  stopPayrollReportScheduler,
+} from "./reportScheduler";
 
 const SCHEDULER_POLL_INTERVAL_MS = parseInt(
   process.env.SCHEDULER_POLL_MS || "60000",
@@ -754,6 +758,7 @@ export const startScheduler = async (): Promise<void> => {
 
   startWebhookDLQRetryWorker();
   startWorkerNotificationSchedulers();
+  startPayrollReportScheduler();
 
   startHealthCheck();
 
@@ -780,6 +785,8 @@ export const stopScheduler = (): void => {
     clearInterval(healthCheckIntervalId);
     healthCheckIntervalId = null;
   }
+
+  stopPayrollReportScheduler();
 
   for (const [scheduleId] of activeJobs) {
     unscheduleJob(scheduleId);

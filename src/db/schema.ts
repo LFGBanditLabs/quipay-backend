@@ -32,6 +32,7 @@ export const payrollStreams = pgTable(
     workerAddress: text("worker_address").notNull(),
     totalAmount: numeric("total_amount").notNull(), // stored in stroops (1e-7 XLM equivalent)
     withdrawnAmount: numeric("withdrawn_amount").notNull().default("0"),
+    rate: numeric("rate"), // Per-second payment rate in stroops
     startTs: bigint("start_ts", { mode: "number" }).notNull(), // unix seconds (on-chain ledger timestamp)
     endTs: bigint("end_ts", { mode: "number" }).notNull(),
     status: text("status").notNull().default("active"), // active | paused | completed | cancelled
@@ -502,14 +503,36 @@ export const crossChainTransfers = pgTable(
   ],
 );
 
+// Employer branding settings for payslip and report customization
+export const employerBranding = pgTable(
+  "employer_branding",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    employerAddress: text("employer_address").notNull().unique(),
+    logoUrl: text("logo_url"),
+    logoMetadata: jsonb("logo_metadata"),
+    primaryColor: text("primary_color").notNull().default("#2563eb"),
+    secondaryColor: text("secondary_color").notNull().default("#64748b"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_employer_branding_address").on(table.employerAddress),
+  ],
+);
+
 // Payroll report schedules for automated email reports
 export const payrollReportSchedules = pgTable(
   "payroll_report_schedules",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     employerId: text("employer_id").notNull(),
-    frequency: text("frequency").notNull(), // 'weekly' | 'monthly'
-    dayOfMonth: integer("day_of_month"), // 1-31 for monthly
+    frequency: text("frequency").notNull(), // 'weekly' | 'monthly' | 'quarterly'
+    dayOfMonth: integer("day_of_month"), // 1-31 for monthly / quarterly
     dayOfWeek: integer("day_of_week"), // 0-6 for weekly (0=Sunday)
     email: text("email").notNull(),
     includeSections: text("include_sections")
@@ -531,5 +554,36 @@ export const payrollReportSchedules = pgTable(
     index("idx_report_schedules_employer").on(table.employerId),
     index("idx_report_schedules_enabled").on(table.enabled),
     index("idx_report_schedules_next_send").on(table.nextSendAt),
+  ],
+);
+
+// Generated payroll reports record history
+export const generatedReports = pgTable(
+  "generated_reports",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    scheduleId: bigint("schedule_id", { mode: "number" }),
+    employerId: text("employer_id").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    frequency: text("frequency").notNull(),
+    format: text("format").notNull().default("pdf"),
+    includeSections: text("include_sections")
+      .array()
+      .notNull()
+      .default(["summary", "streams", "withdrawals", "vault_balance"]),
+    ipfsHash: text("ipfs_hash"),
+    ipfsUrl: text("ipfs_url"),
+    recipientEmails: text("recipient_emails").notNull(),
+    status: text("status").notNull().default("success"), // 'success' | 'failed'
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_generated_reports_employer").on(table.employerId),
+    index("idx_generated_reports_schedule").on(table.scheduleId),
+    index("idx_generated_reports_created").on(table.createdAt.desc()),
   ],
 );

@@ -1,6 +1,7 @@
 import {
   generateAndSendReport,
   processScheduledReports,
+  calculateNextSendDate,
 } from "../scheduler/reportScheduler";
 import * as reportDataService from "../services/reportDataService";
 import * as pdfGeneratorService from "../services/pdfGeneratorService";
@@ -17,7 +18,21 @@ jest.mock("../services/brandingService");
 jest.mock("../services/ipfsService");
 jest.mock("../templates/reportEmail");
 jest.mock("../services/payrollReportService");
-jest.mock("../db/payrollReportSchedule");
+jest.mock("../db/payrollReportSchedule", () => {
+  const actual = jest.requireActual("../db/payrollReportSchedule");
+  return {
+    ...actual,
+    createReportSchedule: jest.fn(),
+    getReportSchedulesByEmployer: jest.fn(),
+    getReportScheduleById: jest.fn(),
+    updateReportSchedule: jest.fn(),
+    updateReportScheduleLastSent: jest.fn(),
+    deleteReportSchedule: jest.fn(),
+    getEnabledSchedulesDue: jest.fn(),
+    recordGeneratedReport: jest.fn(),
+    getGeneratedReportsByEmployer: jest.fn(),
+  };
+});
 jest.mock("../audit/serviceLogger", () => ({
   serviceLogger: {
     info: jest.fn().mockResolvedValue(undefined),
@@ -40,6 +55,7 @@ const mockReportData = {
     totalDeposits: "2000000000",
     totalDisbursed: "1000000000",
     currentBalance: "1000000000",
+    runwayEstimate: "3.5 months",
   },
   streamEvents: [],
 };
@@ -57,19 +73,26 @@ beforeEach(() => {
   (pdfGeneratorService.generatePayrollReport as jest.Mock).mockResolvedValue(
     Buffer.from("pdf"),
   );
+  (payrollReportService.generatePayrollReportCsv as jest.Mock).mockReturnValue(
+    Buffer.from("csv,data"),
+  );
   (ipfsService.pinProofToIPFS as jest.Mock).mockResolvedValue({
     gatewayUrl: "https://ipfs.io/ipfs/QmTest",
+    cid: "QmTest",
   });
   (reportEmail.renderPayrollReportEmail as jest.Mock).mockReturnValue({
     subject: "Test Report",
     html: "<p>Test</p>",
+  });
+  (payrollReportScheduleDb.recordGeneratedReport as jest.Mock).mockResolvedValue({
+    id: 1,
   });
 });
 
 describe("generateAndSendReport", () => {
   it("generates report data, PDF, pins to IPFS, and sends email", async () => {
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockResolvedValue(true);
 
     const result = await generateAndSendReport(
@@ -78,29 +101,89 @@ describe("generateAndSendReport", () => {
       "monthly",
       ["summary"],
       "pdf",
+      1,
     );
 
     expect(result.sent).toBe(true);
     expect(result.ipfsUrl).toContain("ipfs");
+    expect(result.ipfsHash).toBe("QmTest");
     expect(reportDataService.generateReportData).toHaveBeenCalledWith(
       "emp-1",
       expect.any(Date),
       expect.any(Date),
+      "monthly",
     );
     expect(pdfGeneratorService.generatePayrollReport).toHaveBeenCalled();
     expect(
-      payrollReportService.sendReportEmailWithAttachment,
+      payrollReportService.sendReportEmailWithAttachments,
     ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "test@example.com",
+        subject: "Test Report",
+        html: "<p>Test</p>",
+        pdfBuffer: expect.any(Buffer),
+      }),
+    );
+    expect(payrollReportScheduleDb.recordGeneratedReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduleId: 1,
+        employerId: "emp-1",
+        status: "success",
+      }),
+    );
+  });
+
+  it("handles quarterly frequency with 3 month period", async () => {
+    (
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
+    ).mockResolvedValue(true);
+
+    const result = await generateAndSendReport(
+      "emp-1",
       "test@example.com",
-      "Test Report",
-      "<p>Test</p>",
-      expect.any(Buffer),
+      "quarterly",
+      ["summary"],
+      "pdf",
+    );
+
+    expect(result.sent).toBe(true);
+    expect(reportDataService.generateReportData).toHaveBeenCalledWith(
+      "emp-1",
+      expect.any(Date),
+      expect.any(Date),
+      "quarterly",
+    );
+  });
+
+  it("generates both PDF and CSV when format is both", async () => {
+    (
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
+    ).mockResolvedValue(true);
+
+    const result = await generateAndSendReport(
+      "emp-1",
+      "test@example.com",
+      "monthly",
+      ["summary"],
+      "both",
+    );
+
+    expect(result.sent).toBe(true);
+    expect(pdfGeneratorService.generatePayrollReport).toHaveBeenCalled();
+    expect(payrollReportService.generatePayrollReportCsv).toHaveBeenCalled();
+    expect(
+      payrollReportService.sendReportEmailWithAttachments,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pdfBuffer: expect.any(Buffer),
+        csvBuffer: expect.any(Buffer),
+      }),
     );
   });
 
   it("returns sent=false when all retries fail", async () => {
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockRejectedValue(new Error("SMTP error"));
 
     const result = await generateAndSendReport(
@@ -113,13 +196,18 @@ describe("generateAndSendReport", () => {
 
     expect(result.sent).toBe(false);
     expect(
-      payrollReportService.sendReportEmailWithAttachment,
+      payrollReportService.sendReportEmailWithAttachments,
     ).toHaveBeenCalledTimes(3);
+    expect(payrollReportScheduleDb.recordGeneratedReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+      }),
+    );
   });
 
   it("skips PDF generation when format is csv", async () => {
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockResolvedValue(true);
 
     await generateAndSendReport(
@@ -131,13 +219,14 @@ describe("generateAndSendReport", () => {
     );
 
     expect(pdfGeneratorService.generatePayrollReport).not.toHaveBeenCalled();
+    expect(payrollReportService.generatePayrollReportCsv).toHaveBeenCalled();
     expect(
-      payrollReportService.sendReportEmailWithAttachment,
+      payrollReportService.sendReportEmailWithAttachments,
     ).toHaveBeenCalledWith(
-      "test@example.com",
-      "Test Report",
-      "<p>Test</p>",
-      null,
+      expect.objectContaining({
+        pdfBuffer: null,
+        csvBuffer: expect.any(Buffer),
+      }),
     );
   });
 
@@ -146,7 +235,7 @@ describe("generateAndSendReport", () => {
       new Error("IPFS down"),
     );
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockResolvedValue(true);
 
     const result = await generateAndSendReport(
@@ -166,7 +255,7 @@ describe("generateAndSendReport", () => {
       new Error("not found"),
     );
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockResolvedValue(true);
 
     const result = await generateAndSendReport(
@@ -181,7 +270,32 @@ describe("generateAndSendReport", () => {
     expect(pdfGeneratorService.generatePayrollReport).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({ primaryColor: "#2563eb" }),
+      expect.any(String),
+      expect.any(Array),
     );
+  });
+});
+
+describe("calculateNextSendDate", () => {
+  it("calculates next weekly date", () => {
+    const base = new Date(2026, 0, 1, 10, 0, 0); // Thursday Jan 1 2026
+    const next = calculateNextSendDate("weekly", null, 1, base); // Next Monday
+    expect(next.getDay()).toBe(1);
+    expect(next > base).toBe(true);
+  });
+
+  it("calculates next monthly date", () => {
+    const base = new Date(2026, 0, 15); // Jan 15 2026
+    const next = calculateNextSendDate("monthly", 1, null, base); // Feb 1 2026
+    expect(next.getMonth()).toBe(1);
+    expect(next.getDate()).toBe(1);
+  });
+
+  it("calculates next quarterly date", () => {
+    const base = new Date(2026, 0, 15); // Jan 15 2026
+    const next = calculateNextSendDate("quarterly", 5, null, base); // Apr 5 2026
+    expect(next.getMonth()).toBe(3);
+    expect(next.getDate()).toBe(5);
   });
 });
 
@@ -208,7 +322,7 @@ describe("processScheduledReports", () => {
       },
     ]);
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockResolvedValue(true);
 
     await processScheduledReports();
@@ -229,7 +343,7 @@ describe("processScheduledReports", () => {
       .mockRejectedValueOnce(new Error("DB error"))
       .mockResolvedValueOnce(mockReportData);
     (
-      payrollReportService.sendReportEmailWithAttachment as jest.Mock
+      payrollReportService.sendReportEmailWithAttachments as jest.Mock
     ).mockResolvedValue(true);
 
     await processScheduledReports();
@@ -257,3 +371,4 @@ describe("processScheduledReports", () => {
     ).not.toHaveBeenCalled();
   });
 });
+

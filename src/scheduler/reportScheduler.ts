@@ -2,8 +2,14 @@ import * as cron from "node-cron";
 import {
   getEnabledSchedulesDue,
   updateReportScheduleLastSent,
+  calculateNextSendDate,
+  recordGeneratedReport,
+  updateReportSchedule,
 } from "../db/payrollReportSchedule";
-import { sendReportEmailWithAttachment } from "../services/payrollReportService";
+import {
+  sendReportEmailWithAttachments,
+  generatePayrollReportCsv,
+} from "../services/payrollReportService";
 import { generateReportData } from "../services/reportDataService";
 import {
   generatePayrollReport,
@@ -18,38 +24,7 @@ import { serviceLogger } from "../audit/serviceLogger";
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 
-/**
- * Calculate next send date based on frequency and optional day preferences.
- * - weekly: next occurrence of dayOfWeek (1=Mon..7=Sun), defaults to next Monday
- * - monthly: next occurrence of dayOfMonth (1-28), defaults to 1st of next month
- */
-const calculateNextSendDate = (
-  frequency: "weekly" | "monthly",
-  dayOfMonth?: number | null,
-  dayOfWeek?: number | null,
-): Date => {
-  const now = new Date();
-
-  if (frequency === "weekly") {
-    const targetDay = dayOfWeek ?? 1; // default: Monday
-    const next = new Date(now);
-    const diff = (targetDay - now.getDay() + 7) % 7 || 7;
-    next.setDate(now.getDate() + diff);
-    next.setHours(9, 0, 0, 0);
-    return next;
-  } else {
-    const targetDay = dayOfMonth ?? 1;
-    const nextMonth = new Date(
-      now.getFullYear(),
-      now.getMonth() + 1,
-      Math.min(targetDay, 28),
-      9,
-      0,
-      0,
-    );
-    return nextMonth;
-  }
-};
+export { calculateNextSendDate };
 
 /**
  * Sleep helper for retry backoff
@@ -66,15 +41,19 @@ export const generateAndSendReport = async (
   frequency: string,
   includeSections: string[],
   format: string,
-): Promise<{ sent: boolean; ipfsUrl?: string }> => {
-  // Calculate reporting period
+  scheduleId?: number,
+): Promise<{ sent: boolean; ipfsUrl?: string; ipfsHash?: string }> => {
+  // Calculate reporting period based on frequency
   const now = new Date();
   const periodEnd = new Date(now);
   const periodStart = new Date(now);
 
   if (frequency === "weekly") {
     periodStart.setDate(now.getDate() - 7);
+  } else if (frequency === "quarterly") {
+    periodStart.setMonth(now.getMonth() - 3);
   } else {
+    // monthly default
     periodStart.setMonth(now.getMonth() - 1);
   }
 
@@ -83,6 +62,7 @@ export const generateAndSendReport = async (
     employerId,
     periodStart,
     periodEnd,
+    frequency,
   );
 
   // 2. Get employer branding
@@ -97,41 +77,30 @@ export const generateAndSendReport = async (
     };
   }
 
-  // 3. Generate PDF (if format includes pdf)
-  let pdfBuffer: Buffer | null = null;
-  if (format === "pdf" || format === "both") {
-    const pdfData: PayrollReportPdfData = {
-      employerId: reportData.employerId,
-      periodStart: reportData.periodStart,
-      periodEnd: reportData.periodEnd,
-      totalPaid: reportData.totalPaid,
-      activeStreams: reportData.activeStreams,
-      completedStreams: reportData.completedStreams,
-      workers: reportData.workers,
-      vaultActivity: reportData.vaultActivity,
-      streamEvents: reportData.streamEvents,
-    };
-    pdfBuffer = await generatePayrollReport(pdfData, branding);
-  }
-
-  // 4. Pin to IPFS
+  // 3. Pin metadata to IPFS for immutable record-keeping
   let ipfsUrl: string | undefined;
+  let ipfsHash: string | undefined;
   try {
     const proof = {
       schemaVersion: "1.0",
       streamId: 0,
-      employerAddress: employerId,
-      workerAddress: "",
-      token: "XLM",
+      employer_address: employerId,
+      worker_address: "",
+      tokenAddress: "native",
+      tokenSymbol: "XLM",
       totalAmount: reportData.totalPaid,
       withdrawnAmount: "0",
       startTs: Math.floor(periodStart.getTime() / 1000),
       endTs: Math.floor(periodEnd.getTime() / 1000),
+      closedAt: null,
+      txHash: null,
+      generatedAt: now.toISOString(),
       network: "stellar",
       contractId: "",
     };
     const pinResult = await pinProofToIPFS(proof as any);
     ipfsUrl = pinResult.gatewayUrl;
+    ipfsHash = pinResult.cid;
   } catch (err) {
     await serviceLogger.warn(
       "PayrollReport",
@@ -140,23 +109,58 @@ export const generateAndSendReport = async (
     );
   }
 
-  // 5. Build email
+  // 4. Generate PDF if format includes pdf
+  let pdfBuffer: Buffer | null = null;
+  if (format === "pdf" || format === "both") {
+    const pdfData: PayrollReportPdfData = {
+      employerId: reportData.employerId,
+      employerName: reportData.employerName,
+      periodStart: reportData.periodStart,
+      periodEnd: reportData.periodEnd,
+      totalPaid: reportData.totalPaid,
+      activeStreams: reportData.activeStreams,
+      completedStreams: reportData.completedStreams,
+      totalFlowRate: reportData.totalFlowRate,
+      workers: reportData.workers,
+      vaultActivity: reportData.vaultActivity,
+      streamEvents: reportData.streamEvents,
+    };
+    pdfBuffer = await generatePayrollReport(
+      pdfData,
+      branding,
+      ipfsHash,
+      includeSections,
+    );
+  }
+
+  // 5. Generate CSV if format includes csv
+  let csvBuffer: Buffer | null = null;
+  if (format === "csv" || format === "both") {
+    csvBuffer = generatePayrollReportCsv(reportData);
+  }
+
+  // 6. Build email
   const { subject, html } = renderPayrollReportEmail(reportData, ipfsUrl);
 
-  // 6. Send with retry
+  // 7. Send with retry
+  let sent = false;
+  let lastError: Error | null = null;
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const sent = await sendReportEmailWithAttachment(
-        email,
+      sent = await sendReportEmailWithAttachments({
+        to: email,
         subject,
         html,
         pdfBuffer,
-      );
+        csvBuffer,
+      });
 
       if (sent) {
-        return { sent: true, ipfsUrl };
+        break;
       }
     } catch (err) {
+      lastError = err as Error;
       await serviceLogger.warn(
         "PayrollReport",
         `Email delivery attempt ${attempt}/${MAX_RETRIES} failed`,
@@ -169,7 +173,23 @@ export const generateAndSendReport = async (
     }
   }
 
-  return { sent: false, ipfsUrl };
+  // 8. Record in generated_reports table
+  await recordGeneratedReport({
+    scheduleId,
+    employerId,
+    periodStart,
+    periodEnd,
+    frequency,
+    format,
+    includeSections,
+    ipfsHash,
+    ipfsUrl,
+    recipientEmails: email,
+    status: sent ? "success" : "failed",
+    errorMessage: sent ? null : lastError?.message || "Delivery failed after retries",
+  });
+
+  return { sent, ipfsUrl, ipfsHash };
 };
 
 /**
@@ -192,11 +212,12 @@ export const processScheduledReports = async (): Promise<void> => {
             "vault_balance",
           ],
           schedule.format ?? "pdf",
+          schedule.id,
         );
 
         if (sent) {
           const nextSendAt = calculateNextSendDate(
-            schedule.frequency as "weekly" | "monthly",
+            schedule.frequency,
             schedule.dayOfMonth,
             schedule.dayOfWeek,
           );

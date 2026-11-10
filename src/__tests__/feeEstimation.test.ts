@@ -11,10 +11,11 @@ describe("Stellar Fee Estimation", () => {
   let app: express.Express;
 
   beforeAll(() => {
-    // Create Express app with stellar router
+    // Create Express app with stellar router mounted at both /stellar and /api/stellar
     app = express();
     app.use(express.json());
     app.use("/stellar", stellarRouter);
+    app.use("/api/stellar", stellarRouter);
   });
 
   afterAll(async () => {
@@ -22,6 +23,13 @@ describe("Stellar Fee Estimation", () => {
   });
 
   describe("POST /api/stellar/estimate-fee", () => {
+    it("should return 400 on /api/stellar/estimate-fee when transactionXdr is missing", async () => {
+      const res = await request(app).post("/api/stellar/estimate-fee").send({});
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty("error");
+      expect(res.body.error).toContain("Missing required field");
+    });
+
     it("should return 400 when transactionXdr is missing", async () => {
       const res = await request(app).post("/stellar/estimate-fee").send({});
       expect(res.status).toBe(400);
@@ -106,6 +114,14 @@ describe("Stellar Fee Estimation", () => {
   });
 
   describe("GET /api/stellar/health", () => {
+    it("should return health status via /api/stellar/health", async () => {
+      const res = await request(app).get("/api/stellar/health");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty("status");
+      expect(["healthy", "unhealthy"]).toContain(res.body.status);
+    });
+
     it("should return health status of Stellar RPC connection", async () => {
       const res = await request(app).get("/stellar/health");
 

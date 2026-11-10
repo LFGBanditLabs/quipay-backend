@@ -8,6 +8,7 @@ import { analyticsRouter } from "./analytics";
 import { docsRouter } from "./swagger";
 import { proofsRouter } from "./routes/proofs";
 import { stellarRouter } from "./routes/stellar";
+import { startStellarListener, stopStellarListener } from "./stellarListener";
 import { reportsRouter } from "./routes/reports";
 import { employersRouter } from "./routes/employers";
 import { startEventIndexer, stopEventIndexer } from "./services/eventIndexer";
@@ -187,6 +188,7 @@ app.use("/employers", employersRouter);
 app.use("/api/employers", employersRouter);
 app.use("/proofs", proofsRouter);
 app.use("/stellar", stellarRouter);
+app.use("/api/stellar", stellarRouter);
 app.use("/reports", reportsRouter);
 app.use("/streams", streamsRouter);
 app.use("/api/streams", streamsRouter);
@@ -414,6 +416,7 @@ async function main() {
 
     // Start background services after server is listening
     void startEventIndexer();
+    void startStellarListener();
     startScheduler();
     startMonitor();
     startPayrollReportScheduler();
@@ -488,6 +491,13 @@ async function main() {
         console.log("[Backend] Syncer stopped");
       } catch (err) {
         console.error("[Backend] Failed to stop syncer:", err);
+      }
+
+      try {
+        stopStellarListener();
+        console.log("[Backend] Stellar listener stopped");
+      } catch (err) {
+        console.error("[Backend] Failed to stop stellar listener:", err);
       }
 
       try {
